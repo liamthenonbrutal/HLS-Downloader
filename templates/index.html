@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HLS Downloader</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #fff; --text: #1a1d23; --muted: #6b7280; --border: #e3e6eb;
+    --accent: #2563eb; --accent-text: #fff; --ok: #15803d; --err: #b91c1c; --bar: #e5e7eb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0f1115; --panel: #171a21; --text: #e6e8ec; --muted: #9aa1ad; --border: #2a2f3a;
+      --accent: #3b82f6; --ok: #4ade80; --err: #f87171; --bar: #2a2f3a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 28px 16px 60px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px; margin-bottom: 18px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+  textarea, input, select { width: 100%; padding: 9px 10px; border: 1px solid var(--border); border-radius: 7px;
+    background: var(--bg); color: var(--text); font: inherit; }
+  textarea { min-height: 70px; resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
+  .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 12px; }
+  .actions { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; align-items: center; }
+  button { padding: 9px 16px; border-radius: 7px; border: 1px solid var(--border); background: var(--panel);
+    color: var(--text); font: inherit; cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: .6; cursor: default; }
+  details { margin-top: 14px; }
+  summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+  .check { display: flex; gap: 8px; align-items: center; margin-top: 12px; color: var(--text); font-size: 14px; }
+  .check input { width: auto; }
+  .warn { color: var(--err); font-size: 14px; margin-top: 10px; }
+  .job { border-top: 1px solid var(--border); padding: 12px 0; }
+  .job:first-child { border-top: 0; padding-top: 0; }
+  .job-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+  .job-title { font-weight: 600; overflow-wrap: anywhere; }
+  .job-url { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+  .bar { height: 6px; background: var(--bar); border-radius: 3px; overflow: hidden; margin: 8px 0 6px; }
+  .bar > div { height: 100%; background: var(--accent); transition: width .3s; }
+  .meta { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--muted); align-items: center; }
+  .status-done { color: var(--ok); } .status-error, .status-cancelled { color: var(--err); }
+  .err { color: var(--err); font-size: 13px; margin-top: 4px; overflow-wrap: anywhere; }
+  .meta a, .meta button { font-size: 13px; padding: 3px 10px; }
+  a.btn { color: var(--accent); text-decoration: none; border: 1px solid var(--border); border-radius: 7px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
+  th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; }
+  .tablewrap { overflow-x: auto; }
+  .empty { color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>HLS Downloader</h1>
+  <p class="sub">Paste HLS playlists (.m3u8), DASH (.mpd), direct video/audio links, or video page URLs. One per line.</p>
+
+  <section class="panel">
+    <label for="url">URLs</label>
+    <textarea id="url" placeholder="https://example.com/live/master.m3u8"></textarea>
+
+    <div class="row">
+      <div>
+        <label for="quality">Quality</label>
+        <select id="quality">
+          <option value="best">Best available</option>
+          <option value="2160">Up to 4K</option>
+          <option value="1080">Up to 1080p</option>
+          <option value="720">Up to 720p</option>
+          <option value="480">Up to 480p</option>
+          <option value="360">Up to 360p</option>
+          <option value="audio">Audio only</option>
+        </select>
+      </div>
+      <div>
+        <label for="container">Save as</label>
+        <select id="container">
+          <option value="mp4">MP4</option>
+          <option value="mkv">MKV</option>
+          <option value="webm">WebM</option>
+          <option value="mp3">MP3 (audio)</option>
+          <option value="m4a">M4A (audio)</option>
+          <option value="opus">Opus (audio)</option>
+          <option value="wav">WAV (audio)</option>
+        </select>
+      </div>
+      <div>
+        <label for="filename">File name (optional)</label>
+        <input id="filename" placeholder="auto from title">
+      </div>
+    </div>
+
+    <details>
+      <summary>Advanced: headers for protected streams</summary>
+      <div class="row">
+        <div><label for="referer">Referer</label><input id="referer" placeholder="https://site-that-embeds-the-player.com/"></div>
+        <div><label for="user_agent">User-Agent</label><input id="user_agent" placeholder="default"></div>
+      </div>
+      <div class="row">
+        <div><label for="cookies">Cookie header</label><input id="cookies" placeholder="name=value; other=value"></div>
+      </div>
+      <label class="check"><input type="checkbox" id="playlist"> Download every video if the URL is a playlist / channel</label>
+    </details>
+
+    <div class="actions">
+      <button class="primary" id="go">Download</button>
+      <button id="probe">Check formats</button>
+    </div>
+    {% if not ffmpeg %}<div class="warn">ffmpeg was not found on this computer. Install it so streams can be merged and converted.</div>{% endif %}
+    <div id="msg" class="warn" hidden></div>
+    <div id="probeOut"></div>
+  </section>
+
+  <section class="panel">
+    <h2 style="font-size:16px;margin:0 0 12px">Downloads</h2>
+    <div id="jobs"><p class="empty">Nothing yet.</p></div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+function payload() {
+  const p = {};
+  for (const k of ["url","quality","container","filename","referer","user_agent","cookies"]) p[k] = $(k).value.trim();
+  p.playlist = $("playlist").checked;
+  return p;
+}
+function showMsg(t) { $("msg").textContent = t || ""; $("msg").hidden = !t; }
+
+async function post(path, body) {
+  const r = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+
+$("go").onclick = async () => {
+  showMsg(""); $("probeOut").innerHTML = "";
+  if (!$("url").value.trim()) return showMsg("Paste at least one URL.");
+  try { await post("/api/download", payload()); $("url").value = ""; $("filename").value = ""; refresh(); }
+  catch (e) { showMsg(e.message); }
+};
+
+$("probe").onclick = async () => {
+  showMsg(""); const btn = $("probe"); btn.disabled = true; btn.textContent = "Checking…";
+  const p = payload(); p.url = p.url.split("\n")[0];
+  try {
+    const info = await post("/api/probe", p);
+    if (info.is_playlist) {
+      $("probeOut").innerHTML = `<p><b>${esc(info.title)}</b> — playlist with ${info.count} items. Tick the playlist box under Advanced to get them all.</p>`;
+    } else {
+      const rows = info.formats.map(f => `<tr><td>${esc(f.id)}</td><td>${esc(f.ext)}</td><td>${esc(f.resolution)}</td>
+        <td>${f.tbr ? Math.round(f.tbr) + "k" : ""}</td><td>${esc(f.vcodec === "none" ? "" : f.vcodec)}</td>
+        <td>${esc(f.acodec === "none" ? "" : f.acodec)}</td><td>${esc(f.protocol)}</td><td>${esc(f.size)}</td></tr>`).join("");
+      $("probeOut").innerHTML = `<p><b>${esc(info.title)}</b>${info.is_live ? " (live)" : ""}${info.duration ? " · " + Math.round(info.duration/60) + " min" : ""}</p>
+        <div class="tablewrap"><table><tr><th>ID</th><th>Ext</th><th>Resolution</th><th>Bitrate</th><th>Video</th><th>Audio</th><th>Protocol</th><th>Size</th></tr>${rows}</table></div>`;
+    }
+  } catch (e) { showMsg(e.message); }
+  btn.disabled = false; btn.textContent = "Check formats";
+};
+
+async function act(method, path) { await fetch(path, {method}); refresh(); }
+
+function render(jobs) {
+  if (!jobs.length) { $("jobs").innerHTML = '<p class="empty">Nothing yet.</p>'; return; }
+  $("jobs").innerHTML = jobs.map(j => {
+    const active = ["queued","downloading","processing"].includes(j.status);
+    const size = j.status === "done" ? "" : (j.total ? `${j.downloaded} / ${j.total}` : j.downloaded);
+    return `<div class="job">
+      <div class="job-head"><div class="job-title">${esc(j.title || j.filename || (active ? "Fetching info…" : "Untitled"))}</div>
+        <span class="status-${j.status}">${j.status}${j.status === "downloading" ? " " + j.progress.toFixed(1) + "%" : ""}</span></div>
+      <div class="job-url">${esc(j.url)}</div>
+      <div class="bar"><div style="width:${j.status === "done" ? 100 : j.progress}%"></div></div>
+      <div class="meta">
+        ${size ? `<span>${esc(size)}</span>` : ""}${j.speed ? `<span>${esc(j.speed)}</span>` : ""}${j.eta ? `<span>ETA ${esc(j.eta)}</span>` : ""}
+        ${j.status === "done" && j.filename ? `<a class="btn" href="/files/${encodeURIComponent(j.filename)}">Save file</a>` : ""}
+        ${active ? `<button onclick="act('POST','/api/jobs/${j.id}/cancel')">Cancel</button>` : `<button onclick="act('DELETE','/api/jobs/${j.id}')">Remove</button>`}
+      </div>
+      ${j.error ? `<div class="err">${esc(j.error)}</div>` : ""}
+    </div>`;
+  }).join("");
+}
+
+async function refresh() {
+  try { render((await (await fetch("/api/jobs")).json()).jobs); } catch {}
+}
+refresh(); setInterval(refresh, 1000);
+</script>
+</body>
+</html>
