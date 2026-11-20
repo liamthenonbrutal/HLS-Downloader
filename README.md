@@ -57,5 +57,6 @@ Keep yt-dlp current (`pip install -U yt-dlp`) since sites change often.
 
 ## Making a release
 
-Push a tag like `v1.0.1`. GitHub Actions (`.github/workflows/release.yml`) builds the Windows exe
+Push a tag like `v1.0.1`, or open **Actions → Build Windows exe and release → Run workflow**
+and enter a version. GitHub Actions (`.github/workflows/release.yml`) builds the Windows exe
 with PyInstaller, bundles ffmpeg, smoke-tests it and attaches it to a GitHub release.
