@@ -6,7 +6,9 @@ files (.mp4, .webm, .mp3, ...) and pages from any site yt-dlp supports.
 
 from __future__ import annotations
 
+import glob
 import os
+import re
 import shutil
 import sys
 import threading
@@ -16,6 +18,8 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
 import yt_dlp
+
+from media_check import FinalizePP
 
 FROZEN = getattr(sys, "frozen", False)  # True inside the PyInstaller .exe
 BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
@@ -65,10 +69,12 @@ class Job:
     error: str = ""
     created: float = field(default_factory=time.time)
     cancel_requested: bool = False
+    temp_files: set = field(default_factory=set)
 
     def public(self) -> dict:
         d = asdict(self)
         d.pop("cancel_requested")
+        d.pop("temp_files")
         return d
 
 
@@ -134,20 +140,23 @@ def build_options(
         "default_search": "auto_warning",
     }
 
-    if quality == "audio" or container in AUDIO_CODECS:
-        codec = container if container in AUDIO_CODECS else "mp3"
+    if is_audio(quality, container):
         opts["format"] = QUALITY_FORMATS["audio"]
-        opts["postprocessors"] = [
-            {"key": "FFmpegExtractAudio", "preferredcodec": codec, "preferredquality": "0"}
-        ]
     else:
-        container = container if container in VIDEO_CONTAINERS else "mp4"
-        opts["merge_output_format"] = container
-        # Remux (no re-encode) HLS .ts output into the chosen container.
-        opts["postprocessors"] = [{"key": "FFmpegVideoRemuxer", "preferedformat": container}]
-        # Fix AAC bitstream from MPEG-TS segments when putting them in mp4.
-        opts["fixup"] = "detect_or_warn"
+        opts["merge_output_format"] = target_container(quality, container)
+    # Conversion to the chosen container is done by media_check.FinalizePP,
+    # which also verifies the result is real, playable media.
     return opts
+
+
+def is_audio(quality: str, container: str) -> bool:
+    return quality == "audio" or container in AUDIO_CODECS
+
+
+def target_container(quality: str = "best", container: str = "mp4") -> str:
+    if is_audio(quality, container):
+        return container if container in AUDIO_CODECS else "mp3"
+    return container if container in VIDEO_CONTAINERS else "mp4"
 
 
 def probe(url: str, **kwargs) -> dict:
@@ -236,7 +245,13 @@ class JobManager:
                 opts = build_options(**kwargs)
                 opts["progress_hooks"] = [lambda d: self._on_progress(job, d)]
                 opts["postprocessor_hooks"] = [lambda d: self._on_post(job, d)]
+                quality, container = kwargs.get("quality", "best"), kwargs.get("container", "mp4")
                 with yt_dlp.YoutubeDL(opts) as ydl:
+                    ydl.add_post_processor(
+                        FinalizePP(target_container(quality, container), is_audio(quality, container),
+                                   on_start=lambda: self._on_post(job, {"status": "started"})),
+                        when="post_process",
+                    )
                     info = ydl.extract_info(job.url, download=True)
                     job.title = job.title or (info or {}).get("title", "")
                     final = _final_path(info)
@@ -246,18 +261,42 @@ class JobManager:
                 job.status = "done"
             except Cancelled:
                 job.status = "cancelled"
+                self._cleanup(job)
             except Exception as e:  # noqa: BLE001 - surface any failure to the UI
                 if job.cancel_requested:
                     job.status = "cancelled"
                 else:
                     job.status = "error"
-                    job.error = yt_dlp.utils.remove_terminal_sequences(str(e)).replace("ERROR: ", "")
+                    msg = yt_dlp.utils.remove_terminal_sequences(str(e))
+                    job.error = friendly_error(re.sub(r"^(ERROR: )?(Postprocessing: )?", "", msg))
+                job.filename = ""
+                self._cleanup(job)
+
+    @staticmethod
+    def _cleanup(job: Job) -> None:
+        """Delete partial / unusable files so nothing broken is left in Downloads."""
+        for name in job.temp_files:
+            p = Path(name)
+            for f in (p, p.with_name(p.name + ".part"), p.with_name(p.name + ".ytdl")):
+                try:
+                    f.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            for f in p.parent.glob(glob.escape(p.stem) + ".*"):
+                if f.suffix in (".part", ".ytdl") or ".part-Frag" in f.name or ".converting." in f.name:
+                    try:
+                        f.unlink(missing_ok=True)
+                    except OSError:
+                        pass
 
     def _on_progress(self, job: Job, d: dict) -> None:
         if job.cancel_requested:
             raise Cancelled()
         info = d.get("info_dict") or {}
         job.title = info.get("title") or job.title
+        for key in ("filename", "tmpfilename"):
+            if d.get(key):
+                job.temp_files.add(d[key])
         if d["status"] == "downloading":
             done = d.get("downloaded_bytes") or 0
             total = d.get("total_bytes") or d.get("total_bytes_estimate")
@@ -275,9 +314,26 @@ class JobManager:
     def _on_post(self, job: Job, d: dict) -> None:
         if job.cancel_requested:
             raise Cancelled()
+        if d["status"] == "finished" and d.get("postprocessor") == "Finalize":
+            job.temp_files.clear()  # this item is verified; never clean it up
+            path = (d.get("info_dict") or {}).get("filepath")
+            if path:
+                job.filename = Path(path).name
         if d["status"] == "started":
             job.status = "processing"
             job.speed = job.eta = ""
+
+
+def friendly_error(msg: str) -> str:
+    if "Unsupported URL" in msg:
+        return ("No video was found at this link. If it plays in your browser, open DevTools (F12) → Network, "
+                "filter by m3u8, and paste that link here. (" + msg + ")")
+    if "HTTP Error 403" in msg:
+        return ("The server refused access (403). Set the Referer to the page that plays the video, and add "
+                "cookies / User-Agent from your browser under Advanced. (" + msg + ")")
+    if "HTTP Error 404" in msg or "HTTP Error 410" in msg:
+        return "The link no longer exists or has expired. Copy a fresh one. (" + msg + ")"
+    return msg
 
 
 def _final_path(info: dict | None) -> str | None:

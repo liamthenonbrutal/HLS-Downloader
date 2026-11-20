@@ -10,7 +10,7 @@ import webbrowser
 
 from flask import Flask, abort, jsonify, render_template, request, send_from_directory
 
-from downloader import BUNDLE_DIR, DOWNLOAD_DIR, FROZEN, JobManager, check_ffmpeg, probe
+from downloader import BUNDLE_DIR, DOWNLOAD_DIR, FROZEN, JobManager, check_ffmpeg, friendly_error, probe
 
 app = Flask(__name__, template_folder=str(BUNDLE_DIR / "templates"))
 manager = JobManager(max_parallel=int(os.environ.get("MAX_PARALLEL", "3")))
@@ -42,7 +42,7 @@ def api_probe():
         opts.pop("filename", None)
         return jsonify(probe(url, **opts))
     except Exception as e:  # noqa: BLE001
-        return jsonify(error=str(e).replace("ERROR: ", "")), 400
+        return jsonify(error=friendly_error(str(e).replace("ERROR: ", ""))), 400
 
 
 @app.post("/api/download")
