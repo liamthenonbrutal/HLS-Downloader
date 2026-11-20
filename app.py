@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import argparse
 import os
+import socket
+import threading
+import webbrowser
 
 from flask import Flask, abort, jsonify, render_template, request, send_from_directory
 
-from downloader import DOWNLOAD_DIR, JobManager, check_ffmpeg, probe
+from downloader import BUNDLE_DIR, DOWNLOAD_DIR, FROZEN, JobManager, check_ffmpeg, probe
 
-app = Flask(__name__)
+app = Flask(__name__, template_folder=str(BUNDLE_DIR / "templates"))
 manager = JobManager(max_parallel=int(os.environ.get("MAX_PARALLEL", "3")))
 
 OPTION_KEYS = ("quality", "container", "referer", "user_agent", "cookies", "filename", "playlist")
@@ -77,13 +80,33 @@ def files(name):
     return send_from_directory(DOWNLOAD_DIR, name, as_attachment=True)
 
 
-if __name__ == "__main__":
+def _free_port(host: str, preferred: int) -> int:
+    for port in [preferred, *range(preferred + 1, preferred + 50)]:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            if sock.connect_ex(("127.0.0.1" if host == "0.0.0.0" else host, port)) != 0:
+                return port
+    return 0
+
+
+def main() -> None:
     p = argparse.ArgumentParser(description="HLS / video downloader web UI")
     p.add_argument("--host", default="127.0.0.1", help="use 0.0.0.0 to allow other devices on your network")
     p.add_argument("--port", type=int, default=8000)
+    p.add_argument("--no-browser", action="store_true", help="don't open the browser automatically")
     a = p.parse_args()
+    port = _free_port(a.host, a.port) or a.port
+    url = f"http://{'127.0.0.1' if a.host == '0.0.0.0' else a.host}:{port}"
     if not check_ffmpeg():
         print("WARNING: ffmpeg not found on PATH - merging/converting will fail. Install ffmpeg.")
-    print(f"Downloads go to: {DOWNLOAD_DIR}")
-    print(f"Open http://{a.host}:{a.port}")
-    app.run(host=a.host, port=a.port, threaded=True)
+    print("HLS Downloader is running.")
+    print(f"  Open:       {url}")
+    print(f"  Downloads:  {DOWNLOAD_DIR}")
+    if FROZEN:
+        print("  Close this window to quit.")
+    if not a.no_browser:
+        threading.Timer(1.0, webbrowser.open, args=(url,)).start()
+    app.run(host=a.host, port=port, threaded=True)
+
+
+if __name__ == "__main__":
+    main()

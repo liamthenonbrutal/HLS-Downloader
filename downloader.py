@@ -6,7 +6,9 @@ files (.mp4, .webm, .mp3, ...) and pages from any site yt-dlp supports.
 
 from __future__ import annotations
 
+import os
 import shutil
+import sys
 import threading
 import time
 import uuid
@@ -15,7 +17,20 @@ from pathlib import Path
 
 import yt_dlp
 
-DOWNLOAD_DIR = Path(__file__).resolve().parent / "downloads"
+FROZEN = getattr(sys, "frozen", False)  # True inside the PyInstaller .exe
+BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+
+if os.environ.get("HLS_DOWNLOAD_DIR"):
+    DOWNLOAD_DIR = Path(os.environ["HLS_DOWNLOAD_DIR"]).expanduser()
+elif FROZEN:
+    DOWNLOAD_DIR = Path.home() / "Downloads" / "HLS Downloader"
+else:
+    DOWNLOAD_DIR = Path(__file__).resolve().parent / "downloads"
+
+# The .exe ships its own ffmpeg; put it first on PATH so yt-dlp finds it.
+_bundled_ffmpeg = BUNDLE_DIR / "ffmpeg"
+if _bundled_ffmpeg.is_dir():
+    os.environ["PATH"] = str(_bundled_ffmpeg) + os.pathsep + os.environ.get("PATH", "")
 
 QUALITY_FORMATS = {
     "best": "bv*+ba/b",
